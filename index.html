@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>產品維修助手</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: sans-serif; display: flex; justify-content: center; padding: 20px; }
+        #chat-box { width: 400px; border: 1px solid #ccc; padding: 10px; border-radius: 8px; }
+        #messages { height: 300px; overflow-y: auto; border-bottom: 1px solid #eee; margin-bottom: 10px; }
+        input { width: 80%; padding: 8px; }
+        button { padding: 8px; }
+    </style>
+</head>
+<body>
+    <div id="chat-box">
+        <h3>設備線上診斷</h3>
+        <div id="messages"></div>
+        <input type="text" id="userInput" placeholder="輸入您的問題...">
+        <button onclick="sendMessage()">送出</button>
+    </div>
+
+    <script>
+        function sendMessage() {
+            const input = document.getElementById('userInput');
+            const msgDiv = document.getElementById('messages');
+            if (!input.value) return;
+            
+            msgDiv.innerHTML += `<p><b>您：</b>${input.value}</p>`;
+            msgDiv.innerHTML += `<p><i>AI 正在思考中...</i></p>`;
+            input.value = '';
+            
+            // 這裡未來會接上你的 Python 後端
+        }
+    </script>
+</body>
+</html>
