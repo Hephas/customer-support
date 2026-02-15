@@ -18,4 +18,85 @@
         input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 20px; outline: none; }
         input:focus { border-color: #007bff; }
         button { background: #007bff; color: white; border: none; padding: 8px 18px; border-radius: 20px; cursor: pointer; font-weight: bold; }
-        button:hover { background: #0056b3;
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+
+<div id="chat-container">
+    <header>設備線上診斷中心</header>
+    <div id="messages">
+        <div class="message ai-message">您好！我是您的維修助手。請問您的設備目前遇到了什麼問題？</div>
+    </div>
+    <div id="input-area">
+        <input type="text" id="userInput" placeholder="請描述故障情況..." onkeypress="if(event.keyCode==13) sendMessage()">
+        <button onclick="sendMessage()">送出</button>
+    </div>
+</div>
+
+<script>
+    async function sendMessage() {
+        const input = document.getElementById('userInput');
+        const msgDiv = document.getElementById('messages');
+        const userText = input.value.trim();
+
+        if (!userText) return;
+
+        // 1. 顯示使用者訊息
+        appendMessage('user', userText);
+        input.value = '';
+
+        // 2. 顯示思考中狀態
+        const loadingId = "loading-" + Date.now();
+        const loadingElement = document.createElement('div');
+        loadingElement.id = loadingId;
+        loadingElement.className = 'message ai-message loading';
+        loadingElement.innerText = 'AI 正在分析故障原因...';
+        msgDiv.appendChild(loadingElement);
+        scrollToBottom();
+
+        try {
+            // 3. 呼叫你在 Vercel 部署的後端 API
+            const response = await fetch('https://customer-support-omega-bice.vercel.app/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: userText })
+            });
+
+            if (!response.ok) throw new Error('連線失敗');
+
+            const data = await response.json();
+            
+            // 移除思考中文字
+            document.getElementById(loadingId).remove();
+
+            // 4. 解析 Gemini API 回傳的文字並顯示
+            // 根據你 api/chat.py 的回傳結構，通常在 data.candidates[0].content.parts[0].text
+            const aiResponse = data.candidates[0].content.parts[0].text;
+            appendMessage('ai', aiResponse);
+
+        } catch (error) {
+            console.error('Error:', error);
+            document.getElementById(loadingId).innerText = "抱歉，系統連線異常，請稍後再試。";
+            document.getElementById(loadingId).classList.remove('loading');
+            document.getElementById(loadingId).style.color = 'red';
+        }
+    }
+
+    function appendMessage(role, text) {
+        const msgDiv = document.getElementById('messages');
+        const newMsg = document.createElement('div');
+        newMsg.className = `message ${role}-message`;
+        newMsg.innerText = text;
+        msgDiv.appendChild(newMsg);
+        scrollToBottom();
+    }
+
+    function scrollToBottom() {
+        const msgDiv = document.getElementById('messages');
+        msgDiv.scrollTop = msgDiv.scrollHeight;
+    }
+</script>
+
+</body>
+</html>
