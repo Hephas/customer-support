@@ -1,36 +1,21 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-TW">
 <head>
-    <title>產品維修助手</title>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 產品維修助手</title>
     <style>
-        body { font-family: sans-serif; display: flex; justify-content: center; padding: 20px; }
-        #chat-box { width: 400px; border: 1px solid #ccc; padding: 10px; border-radius: 8px; }
-        #messages { height: 300px; overflow-y: auto; border-bottom: 1px solid #eee; margin-bottom: 10px; }
-        input { width: 80%; padding: 8px; }
-        button { padding: 8px; }
-    </style>
-</head>
-<body>
-    <div id="chat-box">
-        <h3>設備線上診斷</h3>
-        <div id="messages"></div>
-        <input type="text" id="userInput" placeholder="輸入您的問題...">
-        <button onclick="sendMessage()">送出</button>
-    </div>
-
-    <script>
-        function sendMessage() {
-            const input = document.getElementById('userInput');
-            const msgDiv = document.getElementById('messages');
-            if (!input.value) return;
-            
-            msgDiv.innerHTML += `<p><b>您：</b>${input.value}</p>`;
-            msgDiv.innerHTML += `<p><i>AI 正在思考中...</i></p>`;
-            input.value = '';
-            
-            // 這裡未來會接上你的 Python 後端
-        }
-    </script>
-</body>
-</html>
+        /* 簡單美觀的介面設計 */
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        #chat-container { width: 100%; max-width: 450px; background: white; height: 80vh; display: flex; flex-direction: column; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); overflow: hidden; }
+        header { background: #007bff; color: white; padding: 15px; text-align: center; font-weight: bold; }
+        #messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .message { padding: 10px 14px; border-radius: 18px; max-width: 80%; line-height: 1.4; font-size: 15px; }
+        .user-message { background: #007bff; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .ai-message { background: #e9ecef; color: #333; align-self: flex-start; border-bottom-left-radius: 2px; }
+        .loading { color: #888; font-style: italic; font-size: 13px; }
+        #input-area { border-top: 1px solid #eee; padding: 15px; display: flex; gap: 10px; background: white; }
+        input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 20px; outline: none; }
+        input:focus { border-color: #007bff; }
+        button { background: #007bff; color: white; border: none; padding: 8px 18px; border-radius: 20px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #0056b3;
