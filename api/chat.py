@@ -11,77 +11,58 @@ from docx import Document
 import openpyxl
 from pptx import Presentation
 
-# --- 群翌能源 (Hephas Energy) 客服設定 ---
+# --- 群翌能源 (Hephas Energy) 官方設定 ---
 SYSTEM_PROMPT = """你是群翌能源（Hephas Energy）的專業客服AI助理。
 優先根據提供的文件資料回答。文件中找不到答案時，請禮貌告知並建議聯繫專人。
-必須全程使用繁體中文，語氣專業親切。
+必須全程使用繁體中文（台灣習慣），語氣專業且有禮貌。
 公司資訊：
 - 電話：+886-3-578-0221
 - Email：info@hephasenergy.com
 - 地址：台灣新竹縣新竹科學園區園區二路60號1F"""
 
-# 初始化 Gemini (請確認 Vercel 環境變數名稱為 GEMINI_API_KEY)
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-
-# 你提供的 Folder ID
+# 你提供的設定值
 DRIVE_FOLDER_ID = "1xbo0b0EW5gbIt2l8m0dOzORrL4k3-DgH"
 MAX_FILES = 3
 MAX_CHARS = 3500
 
+# 初始化 Gemini
+try:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if api_key:
+        genai.configure(api_key=api_key)
+except Exception as e:
+    print(f"Gemini Init Error: {e}")
+
 def get_drive_service():
-    # 改為直接讀取 JSON，不使用 Base64 編碼
-    # 請確保 Vercel 環境變數名稱改為 GOOGLE_SERVICE_ACCOUNT_KEY
-    key_json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_KEY", "")
+    # 直接讀取 Vercel Environment Variables 裡的原始 JSON 字串
+    key_json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_KEY")
     if not key_json_str:
-        print("[Error] 找不到 GOOGLE_SERVICE_ACCOUNT_KEY 環境變數")
         return None
     try:
-        key_json = json.loads(key_json_str)
+        # 這裡最容易出錯，如果 JSON 格式不對會噴 500
+        key_json = json.loads(key_json_str.strip())
         creds = service_account.Credentials.from_service_account_info(
             key_json,
             scopes=["https://www.googleapis.com/auth/drive.readonly"]
         )
         return build("drive", "v3", credentials=creds)
     except Exception as e:
-        print(f"[Drive Init Error] JSON 解析失敗: {e}")
+        print(f"Drive Auth Error: {e}")
         return None
-
-def search_relevant_files(service, query):
-    try:
-        query_str = f"'{DRIVE_FOLDER_ID}' in parents and trashed=false"
-        results = service.files().list(q=query_str, fields="files(id, name, mimeType)").execute()
-        files = results.get("files", [])
-        
-        # 簡單關鍵字匹配，優化搜尋結果
-        keywords = [k.lower() for k in query.split() if len(k) > 1]
-        scored = []
-        for f in files:
-            score = sum(2 for kw in keywords if kw in f["name"].lower())
-            scored.append((score, f))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [f for score, f in scored[:MAX_FILES]]
-    except Exception as e:
-        print(f"[Search Error] {e}")
-        return []
 
 def extract_text(service, file_info):
     mime = file_info["mimeType"]
     fid = file_info["id"]
     name = file_info["name"]
     try:
-        # 處理 Google 原生格式
         if "google-apps" in mime:
             export_mime = "text/plain" if "spreadsheet" not in mime else "text/csv"
             content = service.files().export(fileId=fid, mimeType=export_mime).execute()
             return f"📄 【{name}】\n{content.decode('utf-8')[:MAX_CHARS]}"
         
-        # 處理 PDF/Office 格式
         buf = io.BytesIO()
         req = service.files().get_media(fileId=fid)
-        downloader = MediaIoBaseDownload(buf, req)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
+        MediaIoBaseDownload(buf, req).get_media() # 簡化下載邏輯
         buf.seek(0)
 
         text = ""
@@ -89,62 +70,54 @@ def extract_text(service, file_info):
             reader = PdfReader(buf)
             text = "\n".join(p.extract_text() or "" for p in reader.pages)
         elif "word" in mime:
-            doc = Document(buf)
-            text = "\n".join(p.text for p in doc.paragraphs)
+            text = "\n".join(p.text for p in Document(buf).paragraphs)
         elif "sheet" in mime:
-            wb = openpyxl.load_workbook(buf, data_only=True)
-            text = "\n".join([f"Sheet: {s}\n" + "\n".join(str(row) for row in wb[s].values) for s in wb.sheetnames])
+            ws = openpyxl.load_workbook(buf, data_only=True).active
+            text = "\n".join("\t".join(str(c) for c in r if c) for r in ws.values if r)
         elif "presentation" in mime:
-            prs = Presentation(buf)
-            text = "\n".join([shape.text for slide in prs.slides for shape in slide.shapes if hasattr(shape, "text")])
+            text = "\n".join(shape.text for slide in Presentation(buf).slides for shape in slide.shapes if hasattr(shape, "text"))
         
         return f"📄 【{name}】\n{text[:MAX_CHARS]}"
-    except Exception as e:
+    except:
         return f"（讀取檔案 {name} 失敗）"
 
 class handler(BaseHTTPRequestHandler):
-    def _send_cors_headers(self):
+    def _send_cors(self, code=200):
+        self.send_response(code)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
 
     def do_OPTIONS(self):
-        self.send_response(200)
-        self._send_cors_headers()
-        self.end_headers()
+        self._send_cors()
 
     def do_POST(self):
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(content_length))
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length))
             user_msg = body.get("message", "")
 
-            # 1. 抓取雲端資料
-            context_text = ""
-            drive = get_drive_service()
-            if drive:
-                relevant_files = search_relevant_files(drive, user_msg)
-                if relevant_files:
-                    context_text = "\n\n".join(extract_text(drive, f) for f in relevant_files)
+            # 檢索雲端資料
+            context = ""
+            service = get_drive_service()
+            if service:
+                q = f"'{DRIVE_FOLDER_ID}' in parents and trashed=false"
+                res = service.files().list(q=q, fields="files(id, name, mimeType)").execute()
+                files = res.get("files", [])
+                # 簡單匹配：檔名包含用戶關鍵字
+                relevant = [f for f in files if any(k in f['name'].lower() for k in user_msg.lower().split())][:MAX_FILES]
+                if not relevant: relevant = files[:1] # 若無匹配，保底取一個檔案
+                context = "\n\n".join(extract_text(service, f) for f in relevant)
 
-            # 2. 組合生成
-            full_prompt = SYSTEM_PROMPT
-            if context_text:
-                full_prompt += f"\n\n參考公司文件內容：\n{context_text}"
+            prompt = SYSTEM_PROMPT + (f"\n\n參考資料：\n{context}" if context else "")
+            model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=prompt)
+            reply = model.generate_content(user_msg).text
             
-            model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=full_prompt)
-            response = model.generate_content(user_msg)
-            
-            # 3. 回傳
-            self.send_response(200)
-            self._send_cors_headers()
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps({"reply": response.text}, ensure_ascii=False).encode("utf-8"))
+            self._send_cors()
+            self.wfile.write(json.dumps({"reply": reply}, ensure_ascii=False).encode("utf-8"))
 
         except Exception as e:
-            # 將詳細錯誤回傳以便除錯
-            self.send_response(500)
-            self._send_cors_headers()
-            self.end_headers()
+            self._send_cors(500)
             self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
