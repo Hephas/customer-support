@@ -14,16 +14,11 @@ from pptx import Presentation
 # --- 群翌能源 (Hephas Energy) 官方設定 ---
 SYSTEM_PROMPT = """你是群翌能源（Hephas Energy）的專業客服AI助理。
 優先根據提供的文件資料回答。文件中找不到答案時，請禮貌告知並建議聯繫專人。
-必須全程使用繁體中文（台灣習慣），語氣專業且有禮貌。
+必須全程使用繁體中文，語氣專業且有禮貌。
 公司資訊：
 - 電話：+886-3-578-0221
 - Email：info@hephasenergy.com
 - 地址：台灣新竹縣新竹科學園區園區二路60號1F"""
-
-# 你提供的設定值
-DRIVE_FOLDER_ID = "1xbo0b0EW5gbIt2l8m0dOzORrL4k3-DgH"
-MAX_FILES = 3
-MAX_CHARS = 3500
 
 # 初始化 Gemini
 try:
@@ -33,14 +28,20 @@ try:
 except Exception as e:
     print(f"Gemini Init Error: {e}")
 
+# 你提供的 Folder ID
+DRIVE_FOLDER_ID = "1xbo0b0EW5gbIt2l8m0dOzORrL4k3-DgH"
+MAX_FILES = 3
+MAX_CHARS = 3500
+
 def get_drive_service():
-    # 直接讀取 Vercel Environment Variables 裡的原始 JSON 字串
+    # 這是最容易報錯的地方，增加 strip() 確保移除首尾空格/換行
     key_json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_KEY")
     if not key_json_str:
         return None
     try:
-        # 這裡最容易出錯，如果 JSON 格式不對會噴 500
-        key_json = json.loads(key_json_str.strip())
+        # 強制清理字串並解析 JSON
+        key_data = key_json_str.strip()
+        key_json = json.loads(key_data)
         creds = service_account.Credentials.from_service_account_info(
             key_json,
             scopes=["https://www.googleapis.com/auth/drive.readonly"]
@@ -62,7 +63,10 @@ def extract_text(service, file_info):
         
         buf = io.BytesIO()
         req = service.files().get_media(fileId=fid)
-        MediaIoBaseDownload(buf, req).get_media() # 簡化下載邏輯
+        downloader = MediaIoBaseDownload(buf, req)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
         buf.seek(0)
 
         text = ""
@@ -70,20 +74,22 @@ def extract_text(service, file_info):
             reader = PdfReader(buf)
             text = "\n".join(p.extract_text() or "" for p in reader.pages)
         elif "word" in mime:
-            text = "\n".join(p.text for p in Document(buf).paragraphs)
+            doc = Document(buf)
+            text = "\n".join(p.text for p in doc.paragraphs)
         elif "sheet" in mime:
-            ws = openpyxl.load_workbook(buf, data_only=True).active
-            text = "\n".join("\t".join(str(c) for c in r if c) for r in ws.values if r)
+            wb = openpyxl.load_workbook(buf, data_only=True)
+            text = "\n".join([f"Sheet: {s}\n" + "\n".join(str(row) for row in wb[s].values) for s in wb.sheetnames])
         elif "presentation" in mime:
-            text = "\n".join(shape.text for slide in Presentation(buf).slides for shape in slide.shapes if hasattr(shape, "text"))
+            prs = Presentation(buf)
+            text = "\n".join([shape.text for slide in prs.slides for shape in slide.shapes if hasattr(shape, "text")])
         
         return f"📄 【{name}】\n{text[:MAX_CHARS]}"
-    except:
+    except Exception as e:
         return f"（讀取檔案 {name} 失敗）"
 
 class handler(BaseHTTPRequestHandler):
-    def _send_cors(self, code=200):
-        self.send_response(code)
+    def _send_cors(self, status_code=200):
+        self.send_response(status_code)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
@@ -99,24 +105,27 @@ class handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             user_msg = body.get("message", "")
 
-            # 檢索雲端資料
+            # 檢索雲端硬碟
             context = ""
-            service = get_drive_service()
-            if service:
+            drive = get_drive_service()
+            if drive:
                 q = f"'{DRIVE_FOLDER_ID}' in parents and trashed=false"
-                res = service.files().list(q=q, fields="files(id, name, mimeType)").execute()
+                res = drive.files().list(q=q, fields="files(id, name, mimeType)").execute()
                 files = res.get("files", [])
-                # 簡單匹配：檔名包含用戶關鍵字
-                relevant = [f for f in files if any(k in f['name'].lower() for k in user_msg.lower().split())][:MAX_FILES]
-                if not relevant: relevant = files[:1] # 若無匹配，保底取一個檔案
-                context = "\n\n".join(extract_text(service, f) for f in relevant)
+                
+                # 簡單關鍵字過濾
+                relevant = [f for f in files if any(k in f['name'].lower() for k in user_msg.lower().split())]
+                target_files = relevant[:MAX_FILES] if relevant else files[:1]
+                
+                context = "\n\n".join(extract_text(drive, f) for f in target_files)
 
-            prompt = SYSTEM_PROMPT + (f"\n\n參考資料：\n{context}" if context else "")
-            model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=prompt)
-            reply = model.generate_content(user_msg).text
+            # 生成回答
+            full_prompt = SYSTEM_PROMPT + (f"\n\n參考資料：\n{context}" if context else "")
+            model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=full_prompt)
+            response = model.generate_content(user_msg)
             
             self._send_cors()
-            self.wfile.write(json.dumps({"reply": reply}, ensure_ascii=False).encode("utf-8"))
+            self.wfile.write(json.dumps({"reply": response.text}, ensure_ascii=False).encode("utf-8"))
 
         except Exception as e:
             self._send_cors(500)
