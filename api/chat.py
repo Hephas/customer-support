@@ -11,20 +11,25 @@ from docx import Document
 import openpyxl
 from pptx import Presentation
 
-# --- 設定區 ---
+# --- 群翌能源客服設定 ---
 SYSTEM_PROMPT = """你是群翌能源（Hephas Energy）的專業客服AI助理。
 優先根據提供的文件資料回答。文件中找不到答案時，請禮貌告知並建議聯繫專人。
-必須全程使用繁體中文，語氣專業親切。"""
+必須全程使用繁體中文，語氣專業親切。
+公司資訊：
+- 電話：+886-3-578-0221
+- Email：info@hephasenergy.com
+- 地址：台灣新竹縣新竹科學園區園區二路60號1F"""
 
 # 初始化 Gemini
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "")
+# 你提供的 Folder ID
+DRIVE_FOLDER_ID = "1xbo0b0EW5gbIt2l8m0dOzORrL4k3-DgH"
 MAX_FILES = 3
 MAX_CHARS = 3500
 
 def get_drive_service():
-    # 改為直接讀取 JSON 字串，不再使用 Base64
+    # 改為直接讀取 Vercel 環境變數中的 JSON 字串
     key_json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_KEY", "")
     if not key_json_str:
         print("[Error] 找不到 GOOGLE_SERVICE_ACCOUNT_KEY 環境變數")
@@ -42,16 +47,15 @@ def get_drive_service():
 
 def search_relevant_files(service, query):
     try:
-        # 搜尋指定資料夾內的檔案
         query_str = f"'{DRIVE_FOLDER_ID}' in parents and trashed=false"
         results = service.files().list(q=query_str, fields="files(id, name, mimeType)").execute()
         files = results.get("files", [])
         
-        # 簡單的關鍵字匹配邏輯
+        # 關鍵字匹配
         keywords = [k.lower() for k in query.split() if len(k) > 1]
         scored = []
         for f in files:
-            score = sum(2 for kw in keywords if kw in f["name"].lower()) # 檔名匹配加分
+            score = sum(2 for kw in keywords if kw in f["name"].lower())
             scored.append((score, f))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [f for score, f in scored[:MAX_FILES]]
@@ -64,13 +68,11 @@ def extract_text(service, file_info):
     fid = file_info["id"]
     name = file_info["name"]
     try:
-        # 處理 Google 原生文件 (Doc/Sheet/Slide)
         if "google-apps" in mime:
             export_mime = "text/plain" if "spreadsheet" not in mime else "text/csv"
             content = service.files().export(fileId=fid, mimeType=export_mime).execute()
             return f"📄 【{name}】\n{content.decode('utf-8')[:MAX_CHARS]}"
         
-        # 處理二進位檔案 (PDF/Word/Excel)
         buf = io.BytesIO()
         req = service.files().get_media(fileId=fid)
         downloader = MediaIoBaseDownload(buf, req)
@@ -82,7 +84,7 @@ def extract_text(service, file_info):
         text = ""
         if mime == "application/pdf":
             reader = PdfReader(buf)
-            text = "\n".join(p.extract_text() for p in reader.pages)
+            text = "\n".join(p.extract_text() or "" for p in reader.pages)
         elif "word" in mime:
             doc = Document(buf)
             text = "\n".join(p.text for p in doc.paragraphs)
@@ -92,7 +94,7 @@ def extract_text(service, file_info):
         
         return f"📄 【{name}】\n{text[:MAX_CHARS]}"
     except Exception as e:
-        return f"（讀取檔案 {name} 失敗: {str(e)}）"
+        return f"（讀取檔案 {name} 失敗）"
 
 class handler(BaseHTTPRequestHandler):
     def _send_cors_headers(self):
@@ -111,14 +113,12 @@ class handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(content_length))
             user_msg = body.get("message", "")
 
-            # 1. 抓取雲端硬碟資料
             context_text = ""
             drive = get_drive_service()
             if drive:
                 relevant_files = search_relevant_files(drive, user_msg)
                 context_text = "\n\n".join(extract_text(drive, f) for f in relevant_files)
 
-            # 2. 組合 Prompt 並呼叫 Gemini
             full_prompt = SYSTEM_PROMPT
             if context_text:
                 full_prompt += f"\n\n參考公司文件內容：\n{context_text}"
@@ -126,7 +126,6 @@ class handler(BaseHTTPRequestHandler):
             model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=full_prompt)
             response = model.generate_content(user_msg)
             
-            # 3. 回傳結果
             self.send_response(200)
             self._send_cors_headers()
             self.send_header("Content-Type", "application/json")
